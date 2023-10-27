@@ -172,7 +172,7 @@ fn handle_post_request(request: &str, db_url: &str) -> (String, String) {
                                         Err(e) => (INTERNAL_SERVER_ERROR.to_string(), e)
                                     }
                                 },
-                                _ => (INTERNAL_SERVER_ERROR.to_string(), "Bad json body".to_string())
+                                Err(e) => (INTERNAL_SERVER_ERROR.to_string(), e.to_string())
                             }
                         },
                         1 => (INTERNAL_SERVER_ERROR.to_string(), "Pets already registered to this apartment".to_string()),
@@ -188,19 +188,82 @@ fn handle_post_request(request: &str, db_url: &str) -> (String, String) {
 fn handle_get_request(request: &str, db_url: &str) -> (String, String) {
     println!("Received GET request: {}", request);
     match (get_apt(&request).parse::<i32>(), Client::connect(db_url, NoTls)) {
-        (Ok(apt), Ok(mut client)) =>
-            match client.query_one("SELECT * FROM dogs WHERE apt = $1", &[&apt]) {
-                Ok(row) => {
-                    let dog = Dog {
-                        name: row.get("name"),
-                        weight: row.get("weight"),
-                        breed: row.get("breed")
-                    };
+        (Ok(apt), Ok(mut client)) => {
+            match client.query("SELECT * FROM apts WHERE apt = $1", &[&apt]) {
+                Ok(rows) => {
+                    match rows.len() {
+                        0 => (INTERNAL_SERVER_ERROR.to_string(), "Pets not registered to this apartment".to_string()),
+                        1 => {
+                            let mut pets: Vec<serde_json::value::Value> = Vec::new();
+                            match client.query("SELECT * FROM dogs WHERE apt = $1", &[&apt]) {
+                                Ok(rows) => {
+                                    for row in rows {
+                                        let dog = Dog {
+                                            name: row.get("name"),
+                                            weight: row.get("weight"),
+                                            breed: row.get("breed")
+                                        };
+                                        let mut pet = serde_json::Map::new();
+                                        pet.insert("animal".to_string(), serde_json::value::Value::String("Dog".to_string()));
+                                        pet.insert("name".to_string(), serde_json::value::Value::String(dog.name));
+                                        pet.insert("weight".to_string(), serde_json::value::Value::String(dog.weight.to_string()));
+                                        pet.insert("breed".to_string(), serde_json::value::Value::String(dog.breed));
+                                        pets.push(serde_json::value::Value::Object(pet));
+                                    }
 
-                    (OK_RESPONSE.to_string(), serde_json::to_string(&dog).unwrap())
-                }
-                _ => (NOT_FOUND.to_string(), "Pet not found".to_string()),
+                                    match client.query("SELECT * FROM cats WHERE apt = $1", &[&apt]) {
+                                        Ok(rows) => {
+                                            for row in rows {
+                                                let cat = Cat {
+                                                    name: row.get("name"),
+                                                    weight: row.get("weight"),
+                                                    hair: row.get("hair")
+                                                };
+                                                let mut pet = serde_json::Map::new();
+                                                pet.insert("animal".to_string(), serde_json::value::Value::String("Cat".to_string()));
+                                                pet.insert("name".to_string(), serde_json::value::Value::String(cat.name));
+                                                pet.insert("weight".to_string(), serde_json::value::Value::String(cat.weight.to_string()));
+                                                let mut hair = "".to_string();
+                                                if cat.hair {
+                                                    hair.push_str("LongHaired");
+                                                } else {
+                                                    hair.push_str("ShortHaired");
+                                                }
+                                                pet.insert("hair".to_string(), serde_json::value::Value::String(hair));
+                                                pets.push(serde_json::value::Value::Object(pet));
+                                            };
+                                            
+                                            match client.query("SELECT * FROM birds WHERE apt = $1", &[&apt]) {
+                                                Ok(rows) => {
+                                                    for row in rows {
+                                                        let bird = Bird {
+                                                            name: row.get("name"),
+                                                            species: row.get("species")
+                                                        };
+                                                        let mut pet = serde_json::Map::new();
+                                                        pet.insert("animal".to_string(), serde_json::value::Value::String("Bird".to_string()));
+                                                        pet.insert("name".to_string(), serde_json::value::Value::String(bird.name));
+                                                        pet.insert("species".to_string(), serde_json::value::Value::String(bird.species));                                                        
+                                                        pets.push(serde_json::value::Value::Object(pet));
+                                                    };
+                                                    
+                                                    (OK_RESPONSE.to_string(), serde_json::to_string(&pets).unwrap())
+                                                },
+                                                Err(e) => (INTERNAL_SERVER_ERROR.to_string(), e.to_string())
+                                            }
+                                        },
+                                        Err(e) => (INTERNAL_SERVER_ERROR.to_string(), e.to_string())
+                                    }
+                                },
+                                Err(e) => (INTERNAL_SERVER_ERROR.to_string(), e.to_string())
+                            }
+                        },
+                        _ => (INTERNAL_SERVER_ERROR.to_string(), "Unexpected query value".to_string()) // Should never happen since apt numbers are unique
+                    }
+                },
+                Err(e) => (INTERNAL_SERVER_ERROR.to_string(), e.to_string())
             }
+        },
         _ => (INTERNAL_SERVER_ERROR.to_string(), "Error".to_string()),
     }
 }
