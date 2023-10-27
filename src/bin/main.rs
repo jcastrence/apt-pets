@@ -1,3 +1,4 @@
+use apt_pets::ThreadPool;
 use postgres::{Client, NoTls};
 use postgres::Error as PostgresError;
 use std::net::{ TcpListener, TcpStream };
@@ -26,31 +27,52 @@ struct Bird {
     species: String,
 }
 
+// Binary constants
 const OK_RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n";
 const NOT_FOUND: &str = "HTTP/1.1 404 NOT FOUND\r\n\r\n";
 const INTERNAL_SERVER_ERROR: &str = "HTTP/1.1 500 INTERNAL SERVER ERROR\r\n\r\n";
 fn main() {
-    let db_url: &str = option_env!("DB_URL").unwrap();
-    let server_address: &str = option_env!("SERVER_ADDR").unwrap();
+    // Environment constants
+    const DB_URL: &str = match option_env!("DB_URL") {
+        Some(url) => url,
+        None => "postgres://postgres:postgres@localhost:5432/postgres"
+    };
+    const SERVER_ADDR: &str = match option_env!("SERVER_ADDR") {
+        Some(addr) => addr,
+        None => "0.0.0.0:8080"
+    };
 
-    if let Err(e) = set_database(db_url) {
+    let thread_limit: usize = match option_env!("THREAD_LIMIT") {
+        Some(limit) => match limit.parse::<usize>() {
+            Ok(limit) => limit,
+            Err(_) => panic!("THREAD_LIMIT must be an integer")
+        },
+        None => 10
+    };
+
+    if let Err(e) = set_database(DB_URL) {
         println!("Error: {}", e);
         return;
     }
 
-    let listener = TcpListener::bind(server_address).unwrap();
-    println!("Listening on {}", server_address);
+    let listener = TcpListener::bind(SERVER_ADDR).unwrap();
+    println!("Listening on {}", SERVER_ADDR);
+
+    let pool = ThreadPool::new(thread_limit);
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                handle_client(stream, db_url);
+                pool.execute(|| {
+                    handle_connection(stream, DB_URL);
+                });
             },
             Err(e) => {
                 println!("Error: {}", e);
             }
         }
     }
+
 }
 
 fn set_database(db_url: &str) -> Result<(), PostgresError> {
@@ -100,7 +122,7 @@ fn get_request_body(request: &str) -> Result<serde_json::Value, serde_json::Erro
     res
 }
 
-fn handle_client(mut stream: TcpStream, db_url: &str) {
+fn handle_connection(mut stream: TcpStream, db_url: &str) {
     let mut buffer = [0; 1024];
     let mut request = String::new();
 
